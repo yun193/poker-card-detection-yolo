@@ -1,0 +1,34 @@
+# 本機模型登錄表。路徑相對於專案根目錄；檔案不存在的模型會被自動略過。
+# 把各 Kaggle notebook 的輸出（out/<name>/）解壓到 models/<name>/ 即可。
+
+# 第二階段：牌角二次分類（kaggle/train_corner_cls.ipynb 的輸出 out/corner_cls/ 解壓到 models/corner_cls/）
+refiner:
+  weights: models/corner_cls/best.pt
+  imgsz: 128
+  pad: 0.25          # 須與訓練時的 PAD 一致
+  weight: 0.6        # 合併時分類器的權重（偵測器為 1-weight）
+
+# 整張牌偵測（露出區域分割，kaggle/train_card_seg.ipynb 的輸出 out/card_seg/ 解壓到 models/card_seg/）
+card_seg:
+  weights: models/card_seg/best.pt
+  imgsz: 640
+
+# 方案 B-2：整張牌框轉正裁牌角的牌值分類（kaggle/train_value_cls.ipynb 的輸出 out/value_cls/ 解壓到 models/value_cls/）
+# 不存在時改用上面的 refiner 當零訓練替代
+value_cls:
+  weights: models/value_cls/best.pt
+  imgsz: 128
+
+models:
+  yolov8:
+    type: ultralytics
+    weights: models/yolov8/best.pt
+    imgsz: 416
+  yolo12:
+    type: ultralytics
+    weights: models/yolo12/best.pt
+    imgsz: 416
+  yolo26:
+    type: ultralytics
+    weights: models/yolo26/best.pt
+    imgsz: 416

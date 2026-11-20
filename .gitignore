@@ -1,0 +1,27 @@
+# Python / 環境
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# 本機資料（攝影機影格、測試照、誤判樣本、報告）
+data/
+reports/
+
+# 模型權重與大型檔案（權重請用 kaggle/ 的 notebook 自行訓練）
+*.pt
+*.ts
+*.onnx
+*.weights
+models/**
+!models/*/
+!models/*/metrics.json
+!models/*/results.png
+!models/*/confusion_matrix_normalized.png
+
+# Kaggle 推送暫存（含帳號資訊）
+kaggle/push/
+
+# 個人 AI 協作設定
+CLAUDE.md
+.claude/

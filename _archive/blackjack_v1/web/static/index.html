@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>真牌測試台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>♠ 真牌測試台 <small>撲克牌辨識＋21 點勝率</small></h1>
+  <div class="status">
+    <span id="conn" class="pill off">未連線</span>
+    <span id="perf" class="pill">— ms · — FPS</span>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="toolbar">
+      <div class="seg" role="tablist">
+        <button id="modeCam" class="on">攝影機</button>
+        <button id="modeImg">圖片</button>
+      </div>
+      <select id="camSel" title="攝影機"></select>
+      <label class="file" id="fileWrap" hidden>選擇圖片<input id="fileIn" type="file" accept="image/*" multiple></label>
+      <button id="pauseBtn" title="空白鍵">⏸ 暫停</button>
+      <span class="hint">拖曳黃線調整莊家／玩家分區</span>
+    </div>
+    <div class="viewport" id="viewport">
+      <video id="video" playsinline muted></video>
+      <img id="still" alt="" hidden>
+      <canvas id="overlay"></canvas>
+      <div id="empty" class="empty">按「攝影機」允許鏡頭權限，或切到「圖片」上傳照片</div>
+    </div>
+    <div class="thumbs" id="thumbs" hidden></div>
+  </section>
+
+  <aside>
+    <div class="card hand">
+      <div class="row"><span class="tag dealer">莊家</span><div id="dealerCards" class="cards">—</div></div>
+      <div class="row"><span class="tag player">玩家</span><div id="playerCards" class="cards">—</div><b id="total"></b></div>
+      <div id="strategy" class="strategy">等待牌面</div>
+      <div id="odds" class="odds"></div>
+      <div id="note" class="note"></div>
+    </div>
+
+    <div class="card">
+      <h2>設定</h2>
+      <label>模型 <select id="modelSel"></select></label>
+      <div id="modelInfo" class="muted small"></div>
+      <label>信心度門檻 <output id="confOut">0.45</output>
+        <input id="conf" type="range" min="0.1" max="0.9" step="0.05" value="0.45"></label>
+      <label>穩定視窗（幀） <output id="winOut">8</output>
+        <input id="win" type="range" min="1" max="20" step="1" value="8"></label>
+      <div class="grid2">
+        <label>副數 <select id="decks"><option>1</option><option>2</option><option>4</option><option selected>6</option><option>8</option></select></label>
+        <label class="chk"><input id="h17" type="checkbox"> 莊家軟 17 要牌</label>
+        <label class="chk"><input id="peek" type="checkbox" checked> 莊家偷看底牌</label>
+        <label class="chk"><input id="dealerTop" type="checkbox" checked> 莊家在上方</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>牌靴 <span class="muted small" id="shoeInfo">已記 0 張 · 真數 +0.0</span></h2>
+      <div class="btns">
+        <button id="nextBtn" title="N">下一局（記牌）</button>
+        <button id="resetShoeBtn" title="R">重置牌靴</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>存成測試照 <span class="muted small" id="rtCount"></span></h2>
+      <p class="muted small">正解用 <code>-</code> 分隔，例 <code>As-10h-Kd</code>；沒牌寫 <code>none</code>。預設帶入目前辨識結果，請先核對。</p>
+      <div class="capture">
+        <input id="truth" placeholder="As-10h-Kd">
+        <button id="fillBtn" title="帶入目前辨識">↺</button>
+        <button id="saveBtn" class="primary" title="S">存檔</button>
+      </div>
+      <div id="saveMsg" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>評估真牌集</h2>
+      <button id="evalBtn">用目前模型評估</button>
+      <div id="evalOut" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>原始偵測 <span class="muted small" id="detCount"></span></h2>
+      <div id="detList" class="detlist small"></div>
+    </div>
+  </aside>
+</main>
+
+<footer class="muted small">快捷鍵：空白 暫停 · N 下一局 · R 重置牌靴 · S 存測試照 · F 對調分區</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

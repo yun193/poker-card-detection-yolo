@@ -1,0 +1,15 @@
+# 本機模型登錄表。路徑相對於專案根目錄；檔案不存在的模型會被自動略過。
+# 把各 Kaggle notebook 的輸出（out/<name>/）解壓到 models/<name>/ 即可。
+models:
+  yolov8:
+    type: ultralytics
+    weights: models/yolov8/best.pt
+    imgsz: 416
+  yolo12:
+    type: ultralytics
+    weights: models/yolo12/best.pt
+    imgsz: 416
+  yolo26:
+    type: ultralytics
+    weights: models/yolo26/best.pt
+    imgsz: 416

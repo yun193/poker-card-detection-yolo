@@ -1,0 +1,11 @@
+# 先裝 CUDA 版 torch：
+#   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+ultralytics>=8.4.0
+opencv-python>=4.9
+pyyaml
+pillow
+numpy
+pytest
+fastapi
+uvicorn[standard]
+httpx          # 測試用
