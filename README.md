@@ -53,9 +53,16 @@ _archive/           早期加上 21 點提示的版本（已封存）
 
 > 套件名稱 `blackjack_vision` 是沿用早期版本的命名。
 
-## 1. 在 Kaggle 訓練
+## 1. 取得模型權重
 
-模型權重不放在 repo 裡，請用 `kaggle/` 的 notebook 自行訓練（Kaggle → Import Notebook → GPU、Internet 開 → Save & Run All），
+**直接下載**：到 [Releases v1.0](https://github.com/yun193/poker-card-detection-yolo/releases/tag/v1.0) 下載 `<名稱>_best.pt`，
+放到 `models/<名稱>/best.pt`（例：`yolov8_best.pt` → `models/yolov8/best.pt`）。只要 `yolov8` 就能跑基本辨識，其他缺少時自動略過。
+
+```bash
+gh release download v1.0 --repo yun193/poker-card-detection-yolo --dir models/_dl
+```
+
+**自己訓練**：用 `kaggle/` 的 notebook（Kaggle → Import Notebook → GPU、Internet 開 → Save & Run All），
 跑完下載輸出 zip 解壓到 `models/<名稱>/`：
 
 | Notebook | 輸出 | 資料集 |
