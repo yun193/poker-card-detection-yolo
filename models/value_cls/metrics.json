@@ -1,13 +1,22 @@
 {
-  "model": "yolov8s-cls.pt",
-  "top1": 0.9031884074211121,
-  "top5": 0.9713043570518494,
+  "base": "value_cls",
+  "top1": 0.9053329229354858,
+  "top5": 0.9671820998191833,
+  "synth_val_top1_before": 0.902808427810669,
   "imgsz": 128,
-  "crop": {
-    "INDEX_DX": 0.1,
-    "INDEX_DY": 0.17,
-    "INDEX_SIZE": 0.22,
-    "CROP_PAD": 0.25
+  "epochs": 12,
+  "lr0": 0.0005,
+  "real_pos_target": 250,
+  "real_none_repeat": 2,
+  "real": {
+    "3c": 240,
+    "3d": 255,
+    "4d": 255,
+    "4h": 40,
+    "5c": 264,
+    "5d": 240,
+    "6d": 252,
+    "none": 1698
   },
-  "nb_tag": "value-1"
+  "nb_tag": "value-ft-1"
 }

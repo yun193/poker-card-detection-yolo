@@ -1,0 +1,14 @@
+{
+  "base": "base26",
+  "mask_mAP50": 0.6386657657177581,
+  "mask_mAP50-95": 0.2104688569515288,
+  "box_mAP50": 0.8889457693449468,
+  "real_val_mask_mAP50-95_before": 0.000979020979020979,
+  "real_val_mask_mAP50_before": 0.008653846153846154,
+  "syn_val_mask_mAP50-95": 0.8876551685256138,
+  "syn_val_mask_mAP50-95_before": 0.8780400296456736,
+  "epochs": 40,
+  "lr0": 0.001,
+  "freeze": 10,
+  "nb_tag": "seg26-ft-1"
+}

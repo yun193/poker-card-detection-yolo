@@ -48,6 +48,7 @@ DEBUG = os.environ.get("CARD_DEBUG") == "1"
 RECORD_MAX_S = 60                      # 單次錄製上限（秒）
 SEG_MEMORY_S = 1.0                     # 背景過濾 memory 的時間窗（秒，與幀率無關）
 SCAN_WEIGHT = 0.5                      # 牌內切片讀值的投票權重（相對兩個標準牌角）
+SCAN_MIN_CONF = 0.9                    # 牌內切片讀值的最低信心
 STAMP = "%Y%m%d_%H%M%S_%f"             # 影格檔名＝時間戳，重播時依此還原時間
 
 app = FastAPI(title="Card Vision")
@@ -196,7 +197,7 @@ class Session:
         t2 = time.perf_counter()
         if self.s["scan"] and segs:
             with _gpu_lock:
-                scans = clf.scan_segs(img, segs)
+                scans = clf.scan_segs(img, segs, min_conf=SCAN_MIN_CONF)
         else:
             scans = [[] for _ in segs]
         ms["scan"] = (time.perf_counter() - t2) * 1000

@@ -4,10 +4,10 @@
 
 # 整張牌偵測（露出區域分割，kaggle/train_card_seg.ipynb 的輸出 out/card_seg/ 解壓到 models/card_seg/）
 card_seg:
-  weights: models/card_seg/best.pt
+  weights: models/card_seg26_ft/best.pt  # 2026-11-25 改用 YOLO26n-seg 真牌微調版；回退：models/card_seg_ft/best.pt（v8 微調）、models/card_seg/best.pt（seg-2）
   imgsz: 640
 
 # 轉正牌角的牌值分類（52 類＋none，kaggle/train_value_cls.ipynb 的輸出 out/value_cls/ 解壓到 models/value_cls/）
 value_cls:
-  weights: models/value_cls/best.pt
+  weights: models/value_cls26_ft/best.pt  # 2026-11-26 改用 YOLO26s-cls 真牌微調版；回退：models/value_cls/best.pt（v8 微調）
   imgsz: 128
