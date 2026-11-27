@@ -15,6 +15,8 @@ import cv2
 import numpy as np
 
 S = 640                 # 合成圖邊長
+# 合成器版本：3 = 現行（可見 1% 即標、4 成疊牌只露牌角細邊）；2 = seg-2 部署版的設定（可見 4%、無細邊疊牌）
+SYNTH_V = globals().get("SYNTH_V", 3)
 
 
 def find_dir(pattern):
@@ -57,7 +59,7 @@ def card_quads(rng):
         w = h / CARD_AR
         ang = rng.uniform(-40, 40)
         # 每張往側邊露出的寬度：4 成是只露出牌角那一條的細邊（實測最常被併進前牌）
-        shift = (rng.uniform(0.06, 0.15) if rng.random() < 0.4 else rng.uniform(0.15, 0.5)) * w
+        shift = (rng.uniform(0.06, 0.15) if rng.random() < (0.4 if SYNTH_V >= 3 else 0) else rng.uniform(0.15, 0.5)) * w
         drop = rng.uniform(-0.08, 0.08) * h          # 每張上下微錯
         cx0, cy0 = rng.uniform(0.25, 0.6) * S, rng.uniform(0.3, 0.7) * S
         ca, sa = math.cos(math.radians(ang)), math.sin(math.radians(ang))
@@ -201,7 +203,7 @@ def render(cards, bgs, rng):
     polys = []
     for m, fa in zip(masks, full_areas):
         vis = cv2.countNonZero(m)
-        if fa <= 0 or vis < 0.01 * fa:
+        if fa <= 0 or vis < (0.01 if SYNTH_V >= 3 else 0.04) * fa:
             continue
         cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         c = max(cs, key=cv2.contourArea)

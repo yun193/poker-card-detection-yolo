@@ -1,12 +1,13 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const SUIT = { c: "♣", d: "♦", h: "♥", s: "♠" };
-const SEND_MAX_W = 1280;       // 傳給後端的影格寬度上限（推論解析度最高 1024，再大沒有意義）
+const SEND_MAX_W = 1280;       // 傳給後端的影格寬度上限（分割模型輸入 640，再大沒有意義）
 
 const st = {
-  mode: "cam", paused: false, ws: null, busy: false, sentAt: 0, fps: 0,
-  res: null, stream: null, files: [], fileIdx: -1, truthDirty: false,
-  settings: { model: null, conf: 0.45, window: 8, dist_factor: 6.0, imgsz: 832, ensemble: true, refine: true, view: "corner", seg_verify: true, seg_value: true },
+  mode: "cam", paused: false, ws: null, busy: false, sentAt: 0, fps: 0, debug: false,
+  res: null, stream: null, files: [], fileIdx: -1, truthDirty: false, recording: null,
+  settings: { conf: 0.5, value_min: 0.6, verify: true, scan: true, smooth: true },
+  rp: { folder: "", frames: [], idx: -1, playing: false, timer: 0, lastIdx: -1 },
 };
 const video = $("video"), still = $("still"), overlay = $("overlay"), ctx = overlay.getContext("2d");
 const grab = document.createElement("canvas");
@@ -15,8 +16,23 @@ const grab = document.createElement("canvas");
 const pretty = (l) => l.slice(0, -1) + SUIT[l.slice(-1)];
 const isRed = (l) => "hd".includes(l.slice(-1));
 const pct = (x) => (x * 100).toFixed(0) + "%";
-const confColor = (c) => (c >= 0.8 ? "#3ccf7a" : c >= 0.5 ? "#f2c14e" : "#e5534b");
 function chip(l) { const s = document.createElement("span"); s.className = "pc" + (isRed(l) ? " red" : ""); s.textContent = pretty(l); return s; }
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// 框的狀態說明：沒有牌值時說明原因
+function segReason(g) {
+  const v = g.value || {};
+  if (g.labels.length) return null;
+  if (!v.label) return "讀不到牌角";
+  if (v.multi) return "多張?";
+  return `信心低 ${pct(v.conf)}`;
+}
+// 牌內切片中與主牌值點數不同的讀值（同點數的只是又讀到同一張牌的牌角）
+const scanExtra = (g) => (g.scan || []).filter((s) => !g.value || !g.value.label || s[0].slice(0, -1) !== g.value.label.slice(0, -1));
+function segText(g) {
+  if (g.labels.length) return g.labels.map(pretty).join("+");
+  return g.value && g.value.multi ? "多張?" : "?";
+}
 
 // ---------------------------------------------------------------- WebSocket
 function connect() {
@@ -26,13 +42,7 @@ function connect() {
   ws.onclose = () => { $("conn").textContent = "未連線"; $("conn").className = "pill off"; setTimeout(connect, 1000); };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    if (m.type === "state") {
-      $("refine").disabled = !m.refiner;
-      [...$("viewSel").options].forEach((o) => { if (o.value !== "corner") o.disabled = !m.card_seg; });
-      $("viewHint").textContent = m.card_seg ? "" : "整張牌框模型訓練中，下載到 models/card_seg/ 後即可選";
-      $("refineHint").textContent = m.refiner ? "" : "（尚未下載分類模型 models/corner_cls/）";
-      if (!st.settings.model && m.settings.model) { st.settings.model = m.settings.model; $("modelSel").value = m.settings.model; sendSettings(); }
-    }
+    if (m.type === "state") onState(m);
     else if (m.type === "result") onResult(m);
     else if (m.type === "report") {
       const el = $("reportMsg"); el.className = "small " + (m.ok ? "ok" : "err");
@@ -42,19 +52,38 @@ function connect() {
   st.ws = ws;
 }
 const wsReady = () => st.ws && st.ws.readyState === 1;
-function sendSettings() { if (wsReady()) st.ws.send(JSON.stringify({ type: "settings", ...st.settings, smooth: st.mode === "cam" })); }
-function sendCmd(cmd) { if (wsReady()) st.ws.send(JSON.stringify({ type: "cmd", cmd })); }
+function sendSettings() {
+  if (wsReady()) st.ws.send(JSON.stringify({ type: "settings", ...st.settings, smooth: st.settings.smooth && st.mode !== "img" }));
+}
+function sendCmd(cmd, extra = {}) { if (wsReady()) st.ws.send(JSON.stringify({ type: "cmd", cmd, ...extra })); }
+
+function onState(m) {
+  const miss = Object.entries(m.models).filter(([, ok]) => !ok).map(([k]) => `models/${k}/`);
+  if (miss.length) { $("note").textContent = `尚未下載模型：${miss.join("、")}（見 README 的權重下載說明）`; $("note").className = "note err"; }
+  const wasRec = !!st.recording;
+  setRecording(m.recording);
+  if (wasRec && !m.recording) loadFolders();   // 錄製結束：重播與回測清單加入新資料夾
+}
+function setRecording(r) {
+  st.recording = r;
+  $("rec").hidden = !r;
+  if (r) $("rec").textContent = `● 錄製中 ${r.s.toFixed(0)} 秒 · ${r.frames} 幀`;
+  $("recBtn").classList.toggle("recording", !!r);
+  $("recBtn").textContent = r ? "■ 停止錄製" : "● 錄製";
+}
 
 function onResult(m) {
   st.busy = false;
   if (m.error) { $("note").textContent = m.error; $("note").className = "note err"; return; }
   const dt = performance.now() - st.sentAt;
   st.fps = st.fps ? st.fps * 0.85 + (1000 / dt) * 0.15 : 1000 / dt;
-  const sc = m.scales.length ? `${m.scales.join("+")}px · ` : "整張牌框 · ";
-  $("perf").textContent = `${sc}推論 ${m.infer_ms} ms · ${st.fps.toFixed(1)} FPS`;
+  const ms = m.ms;
+  $("perf").textContent = `分割 ${ms.seg} · 牌值 ${ms.value} · 切片 ${ms.scan} · 共 ${ms.total} ms · ${st.fps.toFixed(1)} FPS`;
+  if (m.recording) setRecording(m.recording); else if (st.recording && st.mode === "cam") setRecording(null);
   st.res = m;
   renderPanel(m);
   drawOverlay();
+  if (st.mode === "replay" && st.rp.playing) scheduleNext();
 }
 
 // ---------------------------------------------------------------- 影格來源
@@ -78,13 +107,14 @@ async function startCam() {
     await listCams();
   } catch (err) {
     $("empty").hidden = false;
-    $("empty").textContent = "無法開啟攝影機：" + err.message + "（可改用「圖片」模式）";
+    $("empty").textContent = "無法開啟攝影機：" + err.message + "（可改用「圖片」或「重播」模式）";
   }
 }
+function stopCam() { if (st.stream) { st.stream.getTracks().forEach((t) => t.stop()); st.stream = null; } }
 function sourceSize() {
   return st.mode === "cam" ? [video.videoWidth, video.videoHeight] : [still.naturalWidth, still.naturalHeight];
 }
-function sendFrame() {
+function sendFrame(t) {
   const el = st.mode === "cam" ? video : still;
   const [w, h] = sourceSize();
   if (!w || !h || !wsReady()) return;
@@ -92,7 +122,13 @@ function sendFrame() {
   grab.width = Math.round(w * k); grab.height = Math.round(h * k);
   grab.getContext("2d").drawImage(el, 0, 0, grab.width, grab.height);
   st.busy = true; st.sentAt = performance.now();
-  grab.toBlob((b) => b ? b.arrayBuffer().then((buf) => st.ws.send(buf)) : (st.busy = false), "image/jpeg", 0.85);
+  grab.toBlob((b) => {
+    if (!b) { st.busy = false; return; }
+    b.arrayBuffer().then((buf) => {
+      if (t !== undefined) st.ws.send(JSON.stringify({ type: "frame_t", t }));   // 重播：用原始時間戳
+      st.ws.send(buf);
+    });
+  }, "image/jpeg", 0.9);
 }
 function loop() {
   if (st.mode === "cam" && !st.paused && !st.busy && video.readyState >= 2) sendFrame();
@@ -101,27 +137,81 @@ function loop() {
 }
 
 function setMode(mode) {
+  if (st.recording && mode !== "cam") sendCmd("record_stop");
   st.mode = mode;
-  $("modeCam").classList.toggle("on", mode === "cam");
-  $("modeImg").classList.toggle("on", mode === "img");
-  $("camSel").hidden = mode !== "cam";
-  $("pauseBtn").hidden = mode !== "cam";
-  $("fileWrap").hidden = mode !== "img";
+  ["Cam", "Img", "Replay"].forEach((n) => $("mode" + n).classList.toggle("on", mode === n.toLowerCase()));
+  document.querySelectorAll(".grp").forEach((g) => (g.hidden = g.dataset.mode !== mode));
   $("thumbs").hidden = mode !== "img" || st.files.length < 2;
+  $("scrub").hidden = mode !== "replay";
+  $("smoothChk").disabled = mode === "img";
   video.hidden = mode !== "cam";
-  still.hidden = mode !== "img";
-  st.res = null; drawOverlay(); sendSettings();
-  if (mode === "cam") { st.busy = false; if (!st.stream) startCam(); else $("empty").hidden = true; }
-  else { if (st.stream) { st.stream.getTracks().forEach((t) => t.stop()); st.stream = null; }
-         $("empty").hidden = st.fileIdx >= 0; $("empty").textContent = "選擇一張或多張照片"; }
+  still.hidden = mode === "cam";
+  still.removeAttribute("src");
+  pauseReplay();
+  st.res = null; st.busy = false; renderEmptyPanel(); drawOverlay(); sendCmd("reset"); sendSettings();
+  if (mode === "cam") { if (!st.stream) startCam(); else $("empty").hidden = true; return; }
+  stopCam();
+  if (mode === "img") {
+    $("empty").hidden = st.fileIdx >= 0; $("empty").textContent = "選擇一張或多張照片";
+    if (st.fileIdx >= 0) showFile(st.fileIdx);
+  } else {
+    $("empty").hidden = false; $("empty").textContent = "選擇影格資料夾（DEBUG 監看存檔或錄製）";
+    if ($("folderSel").value) openFolder($("folderSel").value);
+  }
 }
 function showFile(i) {
   st.fileIdx = i;
-  const f = st.files[i];
   still.onload = () => { $("empty").hidden = true; st.busy = false; sendFrame(); };
-  still.src = URL.createObjectURL(f);
+  still.src = URL.createObjectURL(st.files[i]);
   [...$("thumbs").children].forEach((t, j) => t.classList.toggle("on", j === i));
 }
+
+// ---------------------------------------------------------------- 重播
+async function loadFolders() {
+  const j = await (await fetch("/api/frames")).json();
+  for (const id of ["folderSel", "btSel"]) {
+    const sel = $(id), cur = sel.value;
+    sel.innerHTML = "";
+    if (!j.folders.length) sel.add(new Option("（還沒有影格：用「錄製」或 CARD_DEBUG=1 監看）", ""));
+    j.folders.forEach((f) => sel.add(new Option(`${f.id}（${f.frames} 幀）`, f.id)));
+    if (cur) sel.value = cur;
+  }
+}
+async function openFolder(id) {
+  pauseReplay();
+  st.rp.folder = id; st.rp.frames = []; st.rp.idx = -1;
+  if (!id) return;
+  const j = await (await fetch(`/api/frames/${id}/list`)).json();
+  if (st.rp.folder !== id) return;   // 等待期間又換了資料夾
+  st.rp.frames = j.frames;
+  $("frameSlider").max = Math.max(0, j.frames.length - 1);
+  showReplayFrame(0);
+}
+function showReplayFrame(i) {
+  const f = st.rp.frames[i];
+  if (!f) return;
+  if (i !== st.rp.lastIdx + 1) sendCmd("reset");   // 跳格：追蹤紀錄不連續，先清除
+  st.rp.idx = i; st.rp.lastIdx = i;
+  $("frameSlider").value = i;
+  $("frameInfo").textContent = `${i + 1} / ${st.rp.frames.length} · ${new Date(f.t * 1000).toLocaleTimeString()}`;
+  still.onload = () => { $("empty").hidden = true; st.busy = false; sendFrame(f.t); };
+  still.src = `/api/frames/${st.rp.folder}/img/${encodeURIComponent(f.name)}`;
+}
+function scheduleNext() {
+  const i = st.rp.idx, fr = st.rp.frames;
+  if (i >= fr.length - 1) { pauseReplay(); return; }
+  const speed = parseFloat($("speedSel").value);
+  const elapsed = performance.now() - st.sentAt;
+  const wait = speed > 0 ? Math.min(2000, (fr[i + 1].t - fr[i].t) * 1000 / speed) - elapsed : 0;
+  st.rp.timer = setTimeout(() => showReplayFrame(i + 1), Math.max(0, wait));
+}
+function playReplay() {
+  if (!st.rp.frames.length) return;
+  if (st.rp.idx >= st.rp.frames.length - 1) { st.rp.lastIdx = -2; showReplayFrame(0); }
+  st.rp.playing = true; $("playBtn").textContent = "⏸ 暫停";
+  if (!st.busy) scheduleNext();
+}
+function pauseReplay() { st.rp.playing = false; clearTimeout(st.rp.timer); $("playBtn").textContent = "▶ 播放"; }
 
 // ---------------------------------------------------------------- 繪圖
 function contentRect() {
@@ -131,177 +221,153 @@ function contentRect() {
   const s = Math.min(cw / w, ch / h);
   return { s, x: (cw - w * s) / 2, y: (ch - h * s) / 2 };
 }
+function path(pts, P) { ctx.beginPath(); pts.forEach((p, k) => { const [x, y] = P(p); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath(); }
+function label(text, x, y, bg, fg = "#fff", font = "bold 15px 'Segoe UI Symbol', 'Microsoft JhengHei', sans-serif") {
+  ctx.font = font; const tw = ctx.measureText(text).width + 10;
+  ctx.fillStyle = bg; ctx.beginPath(); ctx.roundRect(x - tw / 2, y - 11, tw, 22, 5); ctx.fill();
+  ctx.fillStyle = fg; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(text, x, y + 1);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
 function drawOverlay() {
   const dpr = window.devicePixelRatio || 1;
   overlay.width = overlay.clientWidth * dpr; overlay.height = overlay.clientHeight * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, overlay.clientWidth, overlay.clientHeight);
   if (!st.res) return;
-  const r = contentRect();
-  // 被牌角交叉驗證剔除的整張牌框：灰色虛線輪廓（框內沒有牌角，多半是門、畫框等背景）
+  const r = contentRect(), P = (p) => [r.x + p[0] * r.s, r.y + p[1] * r.s];
+  // 背景過濾剔除的框：灰色虛線（多半是門、畫框、書櫃）
   (st.res.segs_rejected || []).forEach((g) => {
-    ctx.beginPath(); g.poly.forEach((p, k) => { const x = r.x + p[0] * r.s, y = r.y + p[1] * r.s; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
-    ctx.setLineDash([4, 6]); ctx.strokeStyle = "rgba(160,160,160,.8)"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+    path(g.poly, P); ctx.setLineDash([4, 6]); ctx.strokeStyle = "rgba(170,170,170,.8)"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
   });
-  // 整張牌框：露出區域（半透明填色）＋貼合的旋轉框（虛線）＋編號與信心度
-  (st.res.segs || []).forEach((g, i) => {
-    const hue = (i * 67) % 360, P = (p) => [r.x + p[0] * r.s, r.y + p[1] * r.s];
-    ctx.beginPath(); g.poly.forEach((p, k) => { const [x, y] = P(p); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
-    ctx.fillStyle = `hsla(${hue},85%,55%,.28)`; ctx.fill();
-    ctx.strokeStyle = `hsl(${hue},85%,55%)`; ctx.lineWidth = 2; ctx.stroke();
-    ctx.beginPath(); g.rbox.forEach((p, k) => { const [x, y] = P(p); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.closePath();
-    ctx.setLineDash([6, 4]); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
-    const [cx, cy] = P(g.center), t = `#${i + 1} ${segValueText(g)}`;
-    ctx.font = "bold 14px sans-serif"; const tw = ctx.measureText(t).width + 8;
-    ctx.fillStyle = `hsl(${hue},85%,40%)`; ctx.fillRect(cx - tw / 2, cy - 10, tw, 20);
-    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.fillText(t, cx, cy + 5); ctx.textAlign = "left";
+  st.res.segs.forEach((g, i) => {
+    const id = g.track ?? i, hue = (id * 67) % 360, on = g.confirmed;
+    const col = on ? `hsl(${hue},80%,55%)` : "hsl(0,0%,70%)";
+    path(g.poly, P);
+    ctx.fillStyle = on ? `hsla(${hue},80%,55%,.22)` : "rgba(200,200,200,.12)"; ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = on ? 2.5 : 1.5; ctx.stroke();
+    // 標籤放在框最上方的點
+    const top = g.rbox.reduce((a, b) => (b[1] < a[1] ? b : a));
+    const [tx, ty] = P(top), v = g.value || {};
+    const conf = g.labels.length && v.label === g.labels[0] ? ` ${pct(v.conf)}` : "";
+    label(segText(g) + conf, tx, Math.max(12, ty - 14), on ? `hsl(${hue},80%,35%)` : "rgba(60,60,60,.85)");
+    if (!st.debug) return;
+    path(g.rbox, P); ctx.setLineDash([6, 4]); ctx.strokeStyle = "rgba(255,255,255,.8)"; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
+    (v.corner_pts || []).forEach((p) => { const [x, y] = P(p); ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.strokeStyle = "#56ccf2"; ctx.lineWidth = 2; ctx.stroke(); });
+    scanExtra(g).forEach(([lab, q, x0, y0]) => {
+      const [x, y] = P([x0, y0]);
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fillStyle = "#f2994a"; ctx.fill();
+      label(`${pretty(lab)} ${pct(q)}`, x, y - 14, "rgba(242,153,74,.9)", "#111", "bold 11px sans-serif");
+    });
+    const [cx, cy] = P(g.center);
+    label(`#${id} ${g.verify || ""} 白${pct(v.white || 0)} 邊${pct(v.border || 0)} 彩${pct(v.color || 0)}`, cx, cy,
+      "rgba(0,0,0,.65)", "#fff", "11px sans-serif");
   });
-  ctx.font = "bold 12px sans-serif";
-  for (const d of st.res.detections) {
-    const [x1, y1, x2, y2] = d.box, col = confColor(d.conf);
-    const X = r.x + x1 * r.s, Y = r.y + y1 * r.s;
-    ctx.strokeStyle = col; ctx.lineWidth = 2;
-    ctx.strokeRect(X, Y, (x2 - x1) * r.s, (y2 - y1) * r.s);
-    const fixed = d.det_label && d.det_label !== d.label;   // 二次分類改判了偵測器的標籤
-    const t = `${fixed ? pretty(d.det_label) + "→" : ""}${pretty(d.label)} ${pct(d.conf)}`, tw = ctx.measureText(t).width + 6;
-    if (fixed) { ctx.strokeStyle = "#bb6bd9"; ctx.lineWidth = 3; ctx.strokeRect(X - 2, Y - 2, (x2 - x1) * r.s + 4, (y2 - y1) * r.s + 4); }
-    ctx.fillStyle = col; ctx.fillRect(X, Y - 16, tw, 16);
-    ctx.fillStyle = "#111"; ctx.fillText(t, X + 3, Y - 4);
-  }
-  // 合併後的實體牌：中心標籤＋連到各牌角的線
-  ctx.font = "bold 22px 'Segoe UI Symbol', 'Microsoft JhengHei', sans-serif";
-  for (const c of st.res.cards) {
-    const x = r.x + c.center[0] * r.s, y = r.y + c.center[1] * r.s, t = pretty(c.label);
-    if (c.corners > 1) {
-      ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
-      for (const d of st.res.detections.filter((d) => d.label === c.raw)) {
-        const dx = r.x + (d.box[0] + d.box[2]) / 2 * r.s, dy = r.y + (d.box[1] + d.box[3]) / 2 * r.s;
-        const lim = st.settings.dist_factor * Math.max(d.box[2] - d.box[0], d.box[3] - d.box[1]) * r.s;
-        // 只連到屬於這張牌的牌角（同名牌可能有多張）
-        if (Math.hypot(dx - x, dy - y) < lim) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(dx, dy); ctx.stroke(); }
-      }
-      ctx.setLineDash([]);
-    }
-    const tw = ctx.measureText(t).width + 14;
-    ctx.globalAlpha = c.confirmed ? 1 : 0.45;           // 尚未確認的軌跡（出現不到 3 幀）半透明
-    ctx.fillStyle = "rgba(255,255,255,.95)";
-    ctx.beginPath(); ctx.roundRect(x - tw / 2, y - 16, tw, 30, 6); ctx.fill();
-    ctx.fillStyle = isRed(c.label) ? "#c62828" : "#111"; ctx.textAlign = "center"; ctx.fillText(t, x, y + 7);
-    if (c.raw !== c.label) {                            // 本幀原始判讀與追蹤投票不同：顯示被修正的原始結果
-      ctx.font = "bold 12px sans-serif"; ctx.fillStyle = "#e5534b";
-      ctx.fillText(`本幀:${pretty(c.raw)} → 已修正`, x, y + 30);
-      ctx.font = "bold 22px 'Segoe UI Symbol', 'Microsoft JhengHei', sans-serif";
-    }
-    ctx.textAlign = "left"; ctx.globalAlpha = 1;
-  }
 }
 
 // ---------------------------------------------------------------- 面板
-// 整張牌框的標籤文字：B-2 牌值達門檻才顯示，否則「?」；兩角認成不同牌時提示「多張?」；沒有牌值時顯示框的信心
-function segValueText(g) {
-  if (!g.value) return pct(g.conf);
-  if (g.value.shown === false) return g.value.multi ? "多張?" : "?";
-  return `${pretty(g.value.label)} ${pct(g.value.conf)}`;
+function renderEmptyPanel() {
+  $("hand").textContent = "—"; $("handInfo").textContent = ""; $("segTable").tBodies[0].innerHTML = "";
 }
-
 function renderPanel(m) {
-  const el = $("stableCards"); el.innerHTML = "";
-  m.stable.length ? m.stable.forEach((l) => el.appendChild(chip(l))) : (el.textContent = "—");
-  $("detCount").textContent = st.settings.view === "card" ? "" : `${m.detections.length} 個牌角 → ${m.cards.length} 張牌（穩定 ${m.stable.length}）`;
-  $("segInfo").textContent = st.settings.view === "corner" ? "" :
-    `整張牌框：偵測到 ${(m.segs || []).length} 張（${m.seg_ms} ms）` + ((m.segs || []).length ? "　信心 " + m.segs.map((g) => pct(g.conf)).join(" / ") : "") +
-    ((m.segs_rejected || []).length ? `　｜無牌角剔除 ${m.segs_rejected.length}` : "") +
-    ((m.segs || []).some((g) => g.value) ? `　｜轉正辨識（${m.seg_value_ms} ms）：` +
-      m.segs.map((g, i) => `#${i + 1} ${segValueText(g)}`).join(" ") : "");
-  $("note").textContent = ""; $("note").className = "note";
-  const dl = $("detList"); dl.innerHTML = "";
-  [...m.detections].sort((x, y) => y.conf - x.conf).forEach((d) => {
-    const div = document.createElement("div");
-    const fx = d.det_label && d.det_label !== d.label ? ` <span style="color:#bb6bd9">（偵測 ${pretty(d.det_label)} → 分類改判）</span>` : "";
-    const cl = d.cls_conf ? ` <span class="muted">分類 ${(d.cls_conf * 100).toFixed(0)}%</span>` : "";
-    div.innerHTML = `<span>${pretty(d.label)}${fx}</span><span>${cl} <span style="color:${confColor(d.conf)}">${(d.conf * 100).toFixed(1)}%</span></span>`;
-    dl.appendChild(div);
+  const el = $("hand"); el.innerHTML = "";
+  m.hand.length ? m.hand.forEach((l) => el.appendChild(chip(l))) : (el.textContent = "—");
+  const rej = (m.segs_rejected || []).length;
+  $("handInfo").textContent = `${m.hand.length} 張 · ${m.segs.length} 個框` + (rej ? `（剔除背景 ${rej}）` : "");
+  if (!$("note").classList.contains("err")) $("note").textContent = "";
+  const rows = m.segs.map((g, i) => {
+    const v = g.value || {}, why = segReason(g);
+    const status = why ? `<span class="tag ${why === "讀不到牌角" ? "bad" : "warn"}">${why}</span>`
+      : `<span class="tag ${g.confirmed ? "ok" : "warn"}">${g.confirmed ? "已確認" : "確認中"}</span>`;
+    const via = g.verify && g.verify !== "card" ? ` <span class="tag">${g.verify === "chain" ? "扇形串接" : "記憶"}</span>` : "";
+    const ex = scanExtra(g);
+    const scan = ex.length ? `<div class="muted">切片另見：${[...new Set(ex.map((s) => pretty(s[0])))].join(" ")}</div>` : "";
+    return `<tr class="${g.confirmed ? "" : "dim"}"><td>${g.track ?? i + 1}</td><td>${esc(segText(g))}${scan}</td>` +
+      `<td>${v.label ? pct(v.conf) : "—"}</td><td>${g.track !== null ? pct(g.agree) : "—"}</td><td>${status}${via}</td></tr>`;
   });
+  $("segTable").tBodies[0].innerHTML = rows.join("") || `<tr><td colspan="5" class="muted">畫面中沒有牌</td></tr>`;
   if (!st.truthDirty && document.activeElement !== $("truth")) $("truth").value = currentTruth();
 }
-const currentTruth = () => st.res ? ([...st.res.stable].sort().join("-") || "none") : "";
+const currentTruth = () => st.res ? ([...st.res.hand].sort().join("-") || "none") : "";
 
-// ---------------------------------------------------------------- 存檔 / 評估
+// ---------------------------------------------------------------- 回測 / 存檔 / 評估
+async function runBacktest() {
+  const id = $("btSel").value, out = $("btOut");
+  if (!id) return;
+  out.textContent = "回測中…（每幀約 30~40 ms）"; $("btBtn").disabled = true;
+  try {
+    const r = await fetch("/api/backtest", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder: id, settings: { ...st.settings } }) });
+    const j = await r.json();
+    if (!r.ok) { out.innerHTML = `<span class="err">${esc(j.detail)}</span>`; return; }
+    const n = (k) => j[k] || 0, kept = n("kept") || 1;
+    out.innerHTML = `<table class="kv">
+      <tr><td>影格</td><td>${n("frames")}</td><td>每幀耗時</td><td>${j.ms_median} ms</td></tr>
+      <tr><td>保留框</td><td>${n("kept")}</td><td>剔除背景</td><td>${n("rejected")}</td></tr>
+      <tr><td>單張牌值</td><td>${n("single")}（${pct(n("single") / kept)}）</td><td>一框多張</td><td>${n("multi")}</td></tr>
+      <tr><td>沒有牌值</td><td>${n("unknown")}（${pct(n("unknown") / kept)}）</td><td>手牌變動</td><td>${n("hand_changes")} 次</td></tr></table>
+      <div class="muted">最常見手牌：${j.top_hands.map(([h, c]) => `${esc(h)}×${c}`).join("、")}</div>`;
+  } finally { $("btBtn").disabled = false; }
+}
 async function saveCapture() {
-  const src = st.mode === "cam" ? video : still;
-  const w = st.mode === "cam" ? video.videoWidth : still.naturalWidth, h = st.mode === "cam" ? video.videoHeight : still.naturalHeight;
-  if (!w || (st.mode === "img" && st.fileIdx < 0)) return;
+  const src = st.mode === "cam" ? video : still, [w, h] = sourceSize();
+  if (!w) return;
   const c = document.createElement("canvas"); c.width = w; c.height = h;
   c.getContext("2d").drawImage(src, 0, 0);
-  const truth = $("truth").value.trim() || "none";
   const r = await fetch("/api/capture", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image: c.toDataURL("image/jpeg", 0.92), truth }) });
-  const j = await r.json();
-  const msg = $("saveMsg");
-  if (r.ok) { msg.className = "small ok"; msg.textContent = `已存 ${j.saved}`; $("rtCount").textContent = `共 ${j.count} 張`; st.truthDirty = false; }
+    body: JSON.stringify({ image: c.toDataURL("image/jpeg", 0.92), truth: $("truth").value.trim() || "none" }) });
+  const j = await r.json(), msg = $("saveMsg");
+  if (r.ok) { msg.className = "small ok"; msg.textContent = `已存 ${j.saved}`; $("rtCount").textContent = `已存 ${j.count} 張`; st.truthDirty = false; }
   else { msg.className = "small err"; msg.textContent = j.detail || "存檔失敗"; }
 }
 async function runEval() {
   const out = $("evalOut"); out.textContent = "評估中…";
   const r = await fetch("/api/evaluate", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: st.settings.model, conf: st.settings.conf, imgsz: st.settings.imgsz, ensemble: st.settings.ensemble, refine: st.settings.refine }) });
+    body: JSON.stringify({ settings: { ...st.settings } }) });
   const j = await r.json();
-  if (!r.ok) { out.innerHTML = `<span class="err">${j.detail}</span>`; return; }
-  out.innerHTML = `<table>
+  if (!r.ok) { out.innerHTML = `<span class="err">${esc(j.detail)}</span>`; return; }
+  out.innerHTML = `<table class="kv">
     <tr><td>照片數</td><td>${j.n}</td><td>整張全對</td><td>${pct(j.exact)}</td></tr>
-    <tr><td>Precision</td><td>${pct(j.precision)}</td><td>Recall</td><td>${pct(j.recall)}</td></tr>
-    <tr><td>F1</td><td>${pct(j.f1)}</td><td>推論</td><td>${j.ms.toFixed(1)} ms</td></tr>
-    <tr><td>尺度</td><td colspan="3">${j.scales.join(" + ")} px</td></tr></table>
-    ${j.errors.length ? "<p>錯誤樣本：</p>" + j.errors.map((e) => `<div class="muted">${e}</div>`).join("") : '<p class="ok">全部正確</p>'}`;
+    <tr><td>精確率</td><td>${pct(j.precision)}</td><td>召回率</td><td>${pct(j.recall)}</td></tr></table>
+    ${j.errors.length ? j.errors.map((e) => `<div class="muted">${esc(e)}</div>`).join("") : '<p class="ok">全部正確</p>'}`;
 }
-async function loadModels() {
-  const j = await (await fetch("/api/models")).json();
-  const sel = $("modelSel"); sel.innerHTML = "";
-  const names = Object.keys(j.models);
-  if (!names.length) { sel.add(new Option("（models/ 底下沒有權重）", "")); return; }
-  names.forEach((n) => sel.add(new Option(n, n)));
-  st.settings.model = st.settings.model || names[0]; sel.value = st.settings.model;
-  const info = () => { const m = j.models[sel.value] || {}; $("modelInfo").textContent = m.mAP50 ? `合成 test：mAP50 ${m.mAP50.toFixed(3)} · mAP50-95 ${m["mAP50-95"].toFixed(3)}` : ""; };
-  sel.onchange = () => { st.settings.model = sel.value; info(); sendSettings(); resendStill(); };
-  info(); sendSettings();
-  const rt = await (await fetch("/api/realtest")).json(); $("rtCount").textContent = `共 ${rt.count} 張`;
-  $("reportMsg").textContent = rt.hard_cases ? `已回報 ${rt.hard_cases} 筆` : "";
-}
-const resendStill = () => { if (st.mode === "img" && st.fileIdx >= 0) { st.busy = false; sendFrame(); } };
+function report() { sendCmd("report", { note: $("reportNote").value.trim() }); }
+function toggleRecord() { if (st.mode === "cam") sendCmd(st.recording ? "record_stop" : "record_start"); }
+const resend = () => {
+  if (st.mode === "img" && st.fileIdx >= 0) { st.busy = false; sendFrame(); }
+  else if (st.mode === "replay" && !st.rp.playing && st.rp.idx >= 0) { st.rp.lastIdx = -2; showReplayFrame(st.rp.idx); }
+};
 
 // ---------------------------------------------------------------- 事件
-function bindSetting(id, key, parse, outId) {
+function bindRange(id, key, outId) {
   $(id).addEventListener("input", (e) => {
-    st.settings[key] = parse(e.target.value);
-    if (outId) $(outId).textContent = e.target.value;
-    sendSettings(); resendStill();
+    st.settings[key] = parseFloat(e.target.value);
+    $(outId).textContent = parseFloat(e.target.value).toFixed(2);
+    sendSettings(); resend();
   });
 }
-bindSetting("conf", "conf", parseFloat, "confOut");
-bindSetting("win", "window", (v) => parseInt(v), "winOut");
-bindSetting("dist", "dist_factor", parseFloat, "distOut");
-bindSetting("imgsz", "imgsz", (v) => parseInt(v));
-$("ensemble").addEventListener("change", (e) => { st.settings.ensemble = e.target.checked; sendSettings(); resendStill(); });
-$("refine").addEventListener("change", (e) => { st.settings.refine = e.target.checked; sendSettings(); resendStill(); });
-$("viewSel").addEventListener("change", (e) => { st.settings.view = e.target.value; sendSettings(); resendStill(); });
-$("segVerify").addEventListener("change", (e) => { st.settings.seg_verify = e.target.checked; sendSettings(); resendStill(); });
-$("segValue").addEventListener("change", (e) => { st.settings.seg_value = e.target.checked; sendSettings(); resendStill(); });
-function report() {
-  if (!wsReady()) return;
-  st.ws.send(JSON.stringify({ type: "cmd", cmd: "report", note: $("reportNote").value.trim() }));
-}
-$("reportBtn").onclick = report;
+bindRange("conf", "conf", "confOut");
+bindRange("valueMin", "value_min", "valueOut");
+for (const [id, key] of [["verifyChk", "verify"], ["scanChk", "scan"], ["smoothChk", "smooth"]])
+  $(id).addEventListener("change", (e) => { st.settings[key] = e.target.checked; sendSettings(); resend(); });
+$("debugChk").addEventListener("change", (e) => { st.debug = e.target.checked; drawOverlay(); });
 
 $("modeCam").onclick = () => setMode("cam");
 $("modeImg").onclick = () => setMode("img");
+$("modeReplay").onclick = () => setMode("replay");
 $("camSel").onchange = startCam;
 $("pauseBtn").onclick = () => { st.paused = !st.paused; $("pauseBtn").textContent = st.paused ? "▶ 繼續" : "⏸ 暫停"; };
+$("recBtn").onclick = toggleRecord;
 $("fileIn").onchange = (e) => {
   st.files = [...e.target.files]; const th = $("thumbs"); th.innerHTML = "";
   st.files.forEach((f, i) => { const im = document.createElement("img"); im.src = URL.createObjectURL(f); im.onclick = () => showFile(i); th.appendChild(im); });
   th.hidden = st.files.length < 2; if (st.files.length) showFile(0);
 };
+$("folderSel").onchange = (e) => openFolder(e.target.value);
+$("playBtn").onclick = () => (st.rp.playing ? pauseReplay() : playReplay());
+$("frameSlider").addEventListener("input", (e) => { pauseReplay(); showReplayFrame(parseInt(e.target.value)); });
 $("resetBtn").onclick = () => sendCmd("reset");
+$("btBtn").onclick = runBacktest;
+$("reportBtn").onclick = report;
 $("saveBtn").onclick = saveCapture;
 $("fillBtn").onclick = () => { st.truthDirty = false; $("truth").value = currentTruth(); };
 $("truth").addEventListener("input", () => (st.truthDirty = true));
@@ -309,17 +375,28 @@ $("evalBtn").onclick = runEval;
 window.addEventListener("resize", drawOverlay);
 window.addEventListener("keydown", (e) => {
   const a = document.activeElement;
-  if ((a.tagName === "INPUT" && a.type !== "range") || a.tagName === "SELECT") return;
+  if ((a.tagName === "INPUT" && a.type !== "range" && a.type !== "checkbox") || a.tagName === "SELECT") return;
   const k = e.key.toLowerCase();
-  if (k === " ") { e.preventDefault(); $("pauseBtn").click(); }
+  if (k === " ") { e.preventDefault(); st.mode === "replay" ? $("playBtn").click() : $("pauseBtn").click(); }
+  else if (k === "r") toggleRecord();
   else if (k === "s") saveCapture();
   else if (k === "c") sendCmd("reset");
   else if (k === "e") report();
-  else if (k === "arrowright" && st.mode === "img" && st.fileIdx < st.files.length - 1) showFile(st.fileIdx + 1);
-  else if (k === "arrowleft" && st.mode === "img" && st.fileIdx > 0) showFile(st.fileIdx - 1);
+  else if (k === "d") $("debugChk").click();
+  else if (k === "arrowright" || k === "arrowleft") {
+    const d = k === "arrowright" ? 1 : -1;
+    if (st.mode === "img" && st.files[st.fileIdx + d]) showFile(st.fileIdx + d);
+    if (st.mode === "replay" && st.rp.frames[st.rp.idx + d]) { pauseReplay(); showReplayFrame(st.rp.idx + d); }
+  }
 });
 
-connect();
-loadModels();
-setMode("cam");
-requestAnimationFrame(loop);
+async function init() {
+  connect();
+  await loadFolders();
+  const rt = await (await fetch("/api/realtest")).json();
+  $("rtCount").textContent = `已存 ${rt.count} 張`;
+  if (rt.hard_cases) $("reportMsg").textContent = `已回報 ${rt.hard_cases} 筆`;
+  setMode("cam");
+  requestAnimationFrame(loop);
+}
+init();

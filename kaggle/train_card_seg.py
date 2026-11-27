@@ -1,5 +1,5 @@
 # %% [markdown]
-# # 整張牌偵測（露出區域分割）— 合成資料＋YOLOv8n-seg
+# # 整張牌偵測（露出區域分割）— 合成資料＋YOLO26n-seg（v8 版改 MODEL 即可）
 #
 # 兩階段方案 B 的第一階段：先把畫面中每張牌**露出的區域**分割出來（手拿扇形時多半只露出一條邊＋牌角），
 # 之後再依框做切片辨識。單一類別 `card`。
@@ -12,11 +12,13 @@
 
 # %%
 N_TRAIN, N_VAL = 10000, 1000
-MODEL = "yolov8n-seg.pt"
+MODEL = "yolo26n-seg.pt"        # 可改 yolov8n-seg.pt
+SYNTH_V = 2                     # 合成器用 seg-2（部署版）的設定，seg-3 設定實測變差
+OUT_NAME = "card_seg26"
 EPOCHS = 60
 BATCH = 32
 SEED = 0
-NB_TAG = "seg-3"
+NB_TAG = "seg26-1"
 print("NB_TAG=" + NB_TAG)
 
 # %%
@@ -68,10 +70,10 @@ if os.path.exists("/kaggle/input"):
     run = Path("/kaggle/working/runs/card_seg")
     best = YOLO(str(run / "weights" / "best.pt"))
     r = best.val(data=str(DS / "data.yaml"), imgsz=S, batch=BATCH, device=0)
-    metrics = {"model": MODEL, "box_mAP50": float(r.box.map50), "box_mAP50-95": float(r.box.map),
+    metrics = {"model": MODEL, "synth_v": SYNTH_V, "nb_tag": NB_TAG, "box_mAP50": float(r.box.map50), "box_mAP50-95": float(r.box.map),
                "mask_mAP50": float(r.seg.map50), "mask_mAP50-95": float(r.seg.map)}
     print(metrics)
-    OUT = Path("/kaggle/working/out/card_seg"); OUT.mkdir(parents=True, exist_ok=True)
+    OUT = Path("/kaggle/working/out") / OUT_NAME; OUT.mkdir(parents=True, exist_ok=True)
     shutil.copy(run / "weights" / "best.pt", OUT / "best.pt")
     for f in ("results.csv", "results.png", "val_batch0_pred.jpg", "val_batch1_pred.jpg"):
         if (run / f).exists():

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>真牌辨識測試台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>♠ 真牌辨識測試台 <small>撲克牌牌角偵測</small></h1>
+  <div class="status">
+    <span id="conn" class="pill off">未連線</span>
+    <span id="perf" class="pill">— ms · — FPS</span>
+  </div>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="toolbar">
+      <div class="seg" role="tablist">
+        <button id="modeCam" class="on">攝影機</button>
+        <button id="modeImg">圖片</button>
+      </div>
+      <select id="camSel" title="攝影機"></select>
+      <label class="file" id="fileWrap" hidden>選擇圖片<input id="fileIn" type="file" accept="image/*" multiple></label>
+      <button id="pauseBtn" title="空白鍵">⏸ 暫停</button>
+      <span class="legend"><i class="hi"></i>≥80% <i class="mid"></i>50–80% <i class="lo"></i>&lt;50%</span>
+    </div>
+    <div class="viewport" id="viewport">
+      <video id="video" playsinline muted></video>
+      <img id="still" alt="" hidden>
+      <canvas id="overlay"></canvas>
+      <div id="empty" class="empty">按「攝影機」允許鏡頭權限，或切到「圖片」上傳照片</div>
+    </div>
+    <div class="thumbs" id="thumbs" hidden></div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>辨識結果 <span class="muted small" id="detCount"></span></h2>
+      <div id="stableCards" class="cards big">—</div>
+      <div id="segInfo" class="small"></div>
+      <div id="note" class="note"></div>
+    </div>
+
+    <div class="card">
+      <h2>設定</h2>
+      <label>顯示 <select id="viewSel">
+        <option value="corner">牌角辨識（點數＋花色）</option>
+        <option value="card">整張牌框（只框牌，不辨識）</option>
+        <option value="both">兩者並列</option>
+      </select></label>
+      <div id="viewHint" class="muted small"></div>
+      <label class="chk" title="「兩者並列」時，整張牌框內要有牌角偵測才算一張牌；被剔除的框以灰色虛線顯示"><input id="segVerify" type="checkbox" checked> 牌角交叉驗證（兩者並列時）</label>
+      <label class="chk" title="方案 B-2：把每個整張牌框轉正，裁左上與右下牌角交給分類器，框上直接標牌值（需牌角分類模型）"><input id="segValue" type="checkbox" checked> 整張牌框轉正辨識牌值</label>
+      <label>模型 <select id="modelSel"></select></label>
+      <div id="modelInfo" class="muted small"></div>
+      <label>信心度門檻 <output id="confOut">0.45</output>
+        <input id="conf" type="range" min="0.1" max="0.9" step="0.05" value="0.45"></label>
+      <div class="grid2">
+        <label>推論解析度 <select id="imgsz"><option>416</option><option>640</option><option selected>832</option><option>1024</option></select></label>
+        <label class="chk" title="同一幀用 416（訓練解析度）＋目前解析度各推論一次再投票，約 2 倍時間"><input id="ensemble" type="checkbox" checked> 多尺度集成</label>
+        <label class="chk" id="refineWrap" title="第二階段：從原始全解析度畫面裁出每個牌角放大，交給 52 類分類模型，與偵測結果加權合併"><input id="refine" type="checkbox" checked> 牌角二次分類</label>
+        <span id="refineHint" class="muted small"></span>
+      </div>
+      <label>追蹤記憶（幀；位置投票的保留長度） <output id="winOut">8</output>
+        <input id="win" type="range" min="1" max="20" step="1" value="8"></label>
+      <label>牌角合併距離（× 牌角框邊長） <output id="distOut">6.0</output>
+        <input id="dist" type="range" min="1" max="15" step="0.5" value="6"></label>
+      <button id="resetBtn" class="small-btn">清除追蹤紀錄</button>
+    </div>
+
+    <div class="card">
+      <h2>存成測試照 <span class="muted small" id="rtCount"></span></h2>
+      <p class="muted small">正解用 <code>-</code> 分隔，例 <code>As-10h-Kd</code>；沒牌寫 <code>none</code>。預設帶入目前辨識結果，請先核對。</p>
+      <div class="capture">
+        <input id="truth" placeholder="As-10h-Kd">
+        <button id="fillBtn" title="帶入目前辨識">↺</button>
+        <button id="saveBtn" class="primary" title="S">存檔</button>
+      </div>
+      <div id="saveMsg" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>回報誤判 <span class="muted small">E</span></h2>
+      <p class="muted small">認錯時按下，存下這一幀原圖與偵測結果到 <code>data/hard_cases/</code>，供分析與第二輪微調。</p>
+      <div class="capture">
+        <input id="reportNote" placeholder="備註，例：Kc 被認成 As">
+        <button id="reportBtn">回報</button>
+      </div>
+      <div id="reportMsg" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>評估真牌集</h2>
+      <button id="evalBtn">用目前模型評估</button>
+      <div id="evalOut" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>原始偵測（牌角）</h2>
+      <div id="detList" class="detlist small"></div>
+    </div>
+  </aside>
+</main>
+
+<footer class="muted small">快捷鍵：空白 暫停 · S 存測試照 · E 回報誤判 · C 清除追蹤 · ←/→ 圖片模式切換</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

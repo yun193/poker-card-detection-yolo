@@ -1,0 +1,13 @@
+{
+  "model": "yolo26s-cls.pt",
+  "top1": 0.9069107174873352,
+  "top5": 0.9697065353393555,
+  "imgsz": 128,
+  "crop": {
+    "INDEX_DX": 0.1,
+    "INDEX_DY": 0.17,
+    "INDEX_SIZE": 0.22,
+    "CROP_PAD": 0.25
+  },
+  "nb_tag": "value26-1"
+}

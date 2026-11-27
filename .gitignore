@@ -4,9 +4,13 @@ __pycache__/
 .pytest_cache/
 *.pyc
 
-# 本機資料（攝影機影格、測試照、誤判樣本、報告）
+# 本機資料（攝影機影格、測試照、誤判樣本、報告）— 錄影畫面含人臉，一律不提交
 data/
 reports/
+*.mp4
+*.webm
+*.avi
+*.mov
 
 # 模型權重與大型檔案（權重請用 kaggle/ 的 notebook 自行訓練）
 *.pt

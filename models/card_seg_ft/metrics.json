@@ -1,0 +1,14 @@
+{
+  "base": "card_seg seg-2",
+  "mask_mAP50": 0.584107523373887,
+  "mask_mAP50-95": 0.2111880546359695,
+  "box_mAP50": 0.8888013931104072,
+  "real_val_mask_mAP50-95_before": 0.00386617472237525,
+  "real_val_mask_mAP50_before": 0.00716054394154658,
+  "syn_val_mask_mAP50-95": 0.8692267848034065,
+  "syn_val_mask_mAP50-95_before": 0.8554708023719495,
+  "epochs": 40,
+  "lr0": 0.001,
+  "freeze": 10,
+  "nb_tag": "seg-ft-1"
+}
